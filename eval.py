@@ -19,6 +19,7 @@ from scene.gaussian_predictor import GaussianSplatPredictor
 from datasets.dataset_factory import get_dataset
 from utils.loss_utils import ssim as ssim_fn
 
+
 class Metricator():
     def __init__(self, device):
         self.lpips_net = lpips_lib.LPIPS(net='vgg').to(device)
@@ -91,13 +92,20 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
 
             os.makedirs(out_example_gt, exist_ok=True)
             os.makedirs(out_example, exist_ok=True)
+        else:
+            out_example_gt = None
+            out_example = None
 
         # batch has length 1, the first image is conditioning
         reconstruction = model(input_images,
                                data["view_to_world_transforms"][:, :model_cfg.data.input_images, ...],
                                rot_transform_quats,
-                               focals_pixels_pred)
-
+                               focals_pixels_pred,saveing_location=out_example)
+        #torchvision.utils.save_image(reconstruction["features_dc"].reshape(1, 3, 64, 64), os.path.join(out_example, 'features_dc.png'))
+        reconstruction_back = reconstruction["back"]
+        reconstruction_front = reconstruction["front"]
+        reconstruction = {k: torch.cat([v,reconstruction_front[k]],dim = 1) for k, v in reconstruction_back.items()}
+        #reconstruction = reconstruction_back
         for r_idx in range( data["gt_images"].shape[1]):
             if "focals_pixels" in data.keys():
                 focals_pixels_render = data["focals_pixels"][0, r_idx]
@@ -115,6 +123,7 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
                 # vis_image_preds(reconstruction, out_example)
                 torchvision.utils.save_image(image, os.path.join(out_example, '{0:05d}'.format(r_idx) + ".png"))
                 torchvision.utils.save_image(data["gt_images"][0, r_idx, ...], os.path.join(out_example_gt, '{0:05d}'.format(r_idx) + ".png"))
+                
 
             # exclude non-foreground images from metric computation
             if not torch.all(data["gt_images"][0, r_idx, ...] == 0):
@@ -219,7 +228,10 @@ def eval_robustness(model, dataloader, device, model_cfg, out_folder=None):
                                 data["view_to_world_transforms"][:, :model_cfg.data.input_images, ...],
                                 rot_transform_quats,
                                 focals_pixels_pred)
-
+        reconstruction_back = reconstruction["back"]
+        reconstruction_front = reconstruction["front"]
+        reconstruction = {k: torch.cat([v,reconstruction_front[k]],dim = 0) for k, v in reconstruction_back.items()}
+        #reconstruction["features_dc"] = normalize_tensor(reconstruction["features_dc"])
         for r_idx in range( data["gt_images"].shape[1]):
             if "focals_pixels" in data.keys():
                 focals_pixels_render = data["focals_pixels"][0, r_idx]

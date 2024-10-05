@@ -10,14 +10,14 @@ general:
   num_devices: 1
   mixed_precision: false
 data:
-  training_resolution: 128
+  training_resolution: 64
   subset: -1
   input_images: 1
   origin_distances: false
 opt:
   iterations: 800001
   base_lr: 0.00005
-  batch_size: 8
+  batch_size: 4
   betas:
     - 0.9
     - 0.999
@@ -57,5 +57,5 @@ logging:
   ckpt_iterations: 1000
   val_log: 10000
   loss_log: 10
-  loop_log: 10000
-  render_log: 10000
+  loop_log: 1000
+  render_log: 1000

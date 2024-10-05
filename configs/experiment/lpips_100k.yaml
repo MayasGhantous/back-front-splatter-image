@@ -1,6 +1,6 @@
 # @package _global_
 opt:
   iterations: 100001
-  pretrained_ckpt: null
+  pretrained_ckpt: "C:/Users/update/Documents/GitHub/Coputer-vision-project/experiments_out/2024-09-27/18-13-43"
   lambda_lpips: 0.01
   base_lr: 0.000005

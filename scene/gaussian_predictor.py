@@ -11,6 +11,16 @@ from einops import rearrange, repeat
 from utils.general_utils import matrix_to_quaternion, quaternion_raw_multiply
 from utils.graphics_utils import fov2focal
 
+#######
+#new code
+import os
+import vedo
+from vedo import Points, show
+import matplotlib.pyplot as plt
+import copy
+import re
+########
+
 # U-Net implementation from EDM
 # Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
@@ -427,6 +437,15 @@ class SongUNet(nn.Module):
 
 # ================== End of implementation taken from EDM ===============
 # NVIDIA copyright does not apply to the code below this line
+def normalize_tensor(tensor):
+    min_val = tensor.min()
+    max_val = tensor.max()
+    
+    if max_val - min_val == 0:
+        return torch.zeros_like(tensor)
+    normalized_tensor = (tensor - min_val) / (max_val - min_val)
+    
+    return normalized_tensor
 
 class SingleImageSongUNetPredictor(nn.Module):
     def __init__(self, cfg, out_channels, bias, scale):
@@ -448,10 +467,23 @@ class SingleImageSongUNetPredictor(nn.Module):
                                 emb_dim_in=emb_dim_in,
                                 channel_mult_noise=0,
                                 attn_resolutions=cfg.model.attention_resolutions)
+        '''self.encoder2 = SongUNet(cfg.data.training_resolution, 
+                                in_channels, 
+                                sum(out_channels),
+                                model_channels=cfg.model.base_dim,
+                                num_blocks=cfg.model.num_blocks,
+                                emb_dim_in=emb_dim_in,
+                                channel_mult_noise=0,
+                                attn_resolutions=cfg.model.attention_resolutions)'''
         self.out = nn.Conv2d(in_channels=sum(out_channels), 
                                  out_channels=sum(out_channels),
                                  kernel_size=1)
-
+        ######
+        #new code
+        self.out2 = nn.Conv2d(in_channels=sum(out_channels), 
+                                 out_channels=sum(out_channels),
+                                 kernel_size=1)
+        ########
         start_channels = 0
         for out_channel, b, s in zip(out_channels, bias, scale):
             nn.init.xavier_uniform_(
@@ -459,14 +491,20 @@ class SingleImageSongUNetPredictor(nn.Module):
                                 :, :, :], s)
             nn.init.constant_(
                 self.out.bias[start_channels:start_channels+out_channel], b)
+            
             start_channels += out_channel
+        self.out2 = copy.deepcopy(self.out)
+
 
     def forward(self, x, film_camera_emb=None, N_views_xa=1):
-        x = self.encoder(x, 
+        x1 = self.encoder(x, 
                          film_camera_emb=film_camera_emb,
                          N_views_xa=N_views_xa)
+        '''x2 = self.encoder2(x, 
+                         film_camera_emb=film_camera_emb,
+                         N_views_xa=N_views_xa)'''
 
-        return self.out(x)
+        return self.out(x1), self.out2(x1)
 
 def networkCallBack(cfg, name, out_channels, **kwargs):
     if name == "SingleUNet":
@@ -680,14 +718,13 @@ class GaussianSplatPredictor(nn.Module):
 
         pos = ray_dirs_xy * depth + offset
 
-        return pos
-
-    def forward(self, x, 
+        return pos ,depth ,offset,ray_dirs_xy * depth
+    
+    def calculate_network_output(self, x, 
                 source_cameras_view_to_world, 
                 source_cv2wT_quat=None,
                 focals_pixels=None,
                 activate_output=True):
-
         B = x.shape[0]
         N_views = x.shape[1]
         # UNet attention will reshape outputs so that there is cross-view attention
@@ -725,25 +762,120 @@ class GaussianSplatPredictor(nn.Module):
                                                              film_camera_emb=film_camera_emb,
                                                              N_views_xa=N_views_xa
                                                              )
-
-            split_network_outputs = split_network_outputs.split(self.split_dimensions_with_offset, dim=1)
-            depth, offset, opacity, scaling, rotation, features_dc = split_network_outputs[:6]
-            if self.cfg.model.max_sh_degree > 0:
-                features_rest = split_network_outputs[6]
-
-            pos = self.get_pos_from_network_output(depth, offset, focals_pixels, const_offset=const_offset)
-
+            return split_network_outputs
         else:
             split_network_outputs = self.network_wo_offset(x, 
                                                            film_camera_emb=film_camera_emb,
                                                            N_views_xa=N_views_xa
                                                            ).split(self.split_dimensions_without_offset, dim=1)
+            return split_network_outputs
+        
+
+    def forward_callback(self, x, 
+                source_cameras_view_to_world, 
+                source_cv2wT_quat=None,
+                focals_pixels=None,
+                activate_output=True,saveing_location = None,index = None,newtwork_output =None):
+
+        B = x.shape[0]
+        N_views = x.shape[1]
+        # UNet attention will reshape outputs so that there is cross-view attention
+        if self.cfg.model.cross_view_attention:
+            N_views_xa = N_views
+        else:
+            N_views_xa = 1
+
+        if self.cfg.cam_embd.embedding is not None:
+            cam_embedding = self.get_camera_embeddings(source_cameras_view_to_world)
+            assert self.cfg.cam_embd.method == "film"
+            film_camera_emb = cam_embedding.reshape(B*N_views, cam_embedding.shape[2])
+        else:
+            film_camera_emb = None
+
+        if self.cfg.data.category in ["hydrants", "teddybears"]:
+            assert focals_pixels is not None
+            focals_pixels = focals_pixels.reshape(B*N_views, *focals_pixels.shape[2:])
+        else:
+            assert focals_pixels is None, "Unexpected argument for non-co3d dataset"
+
+        x = x.reshape(B*N_views, *x.shape[2:])
+        if self.cfg.data.origin_distances:
+            const_offset = x[:, 3:, ...]
+            x = x[:, :3, ...]
+        else:
+            const_offset = None
+
+        source_cameras_view_to_world = source_cameras_view_to_world.reshape(B*N_views, *source_cameras_view_to_world.shape[2:])
+        x = x.contiguous(memory_format=torch.channels_last)
+
+        if self.cfg.model.network_with_offset:
+
+            split_network_outputs = newtwork_output[index]
+
+            split_network_outputs = split_network_outputs.split(self.split_dimensions_with_offset, dim=1)
+            depth, offset, opacity, scaling, rotation, features_dc = split_network_outputs[:6]
+            
+
+            if self.cfg.model.max_sh_degree > 0:
+                features_rest = split_network_outputs[6]
+
+            pos ,depth ,offset,points_before_offset = self.get_pos_from_network_output(depth, offset, focals_pixels, const_offset=const_offset)
+        else:
+            split_network_outputs = newtwork_output[index]
 
             depth, opacity, scaling, rotation, features_dc = split_network_outputs[:5]
             if self.cfg.model.max_sh_degree > 0:
                 features_rest = split_network_outputs[5]
 
-            pos = self.get_pos_from_network_output(depth, 0.0, focals_pixels, const_offset=const_offset)
+            pos ,depth ,offset,points_before_offset = self.get_pos_from_network_output(depth, 0.0, focals_pixels, const_offset=const_offset)
+        ##########
+        #new code
+        
+        if saveing_location is not None:
+            for i in range(0,9):
+                torchvision.utils.save_image((features_rest[0,i,:,:]).unsqueeze(0),os.path.join(saveing_location, 'features_rest_{}.png'.format(i)))
+            torchvision.utils.save_image(features_dc, os.path.join(saveing_location , 'features_dc.png'))
+            torchvision.utils.save_image(opacity,os.path.join(saveing_location, 'opacity.png'))
+            torchvision.utils.save_image(self.opacity_activation(opacity),os.path.join(saveing_location, 'opacity_Activation.png'))
+            torchvision.utils.save_image(normalize_tensor(opacity),os.path.join(saveing_location, 'opacity_norm.png'))
+            torchvision.utils.save_image(depth,os.path.join(saveing_location, 'depth.png'))
+            depth1 = depth[0,0,:,:]
+            plt.imshow(depth1.cpu(), cmap='hot', interpolation='nearest')
+            plt.colorbar()
+            np.savez(os.path.join(saveing_location, 'depth_data.npz'), depth1=depth1.cpu().numpy())
+            torchvision.utils.save_image(normalize_tensor(depth),os.path.join(saveing_location, 'depth_norm.png'))
+            normalized_depth = normalize_tensor(depth).cpu().numpy()
+            np.savez(os.path.join(saveing_location, 'depth_norm_data.npz'), depth_norm=normalized_depth)
+            torchvision.utils.save_image(pos,os.path.join(saveing_location, 'pos.png'))
+            torchvision.utils.save_image((pos[0,0,:,:]).unsqueeze(0),os.path.join(saveing_location, 'pos_x.png'))
+            torchvision.utils.save_image((pos[0,1,:,:]).unsqueeze(0),os.path.join(saveing_location, 'pos_y.png'))
+            torchvision.utils.save_image((pos[0,2,:,:]).unsqueeze(0),os.path.join(saveing_location, 'pos_z.png'))
+            torchvision.utils.save_image(((pos[0,0,:,:]+pos[0,1,:,:]+pos[0,2,:,:])/3).unsqueeze(0),os.path.join(saveing_location, 'pos_mean.png'))
+            torchvision.utils.save_image((normalize_tensor(pos[0,0,:,:])).unsqueeze(0),os.path.join(saveing_location, 'pos_world_x_norm.png'))
+            torchvision.utils.save_image((normalize_tensor(pos[0,1,:,:])).unsqueeze(0),os.path.join(saveing_location, 'pos_world_y_norm.png'))
+            torchvision.utils.save_image((normalize_tensor(pos[0,2,:,:])).unsqueeze(0),os.path.join(saveing_location, 'pos_world_z_norm.png'))
+            x = pos[0, 0, :, :].cpu().numpy()  # Transfer to CPU and convert to NumPy
+            y = pos[0, 1, :, :].cpu().numpy()
+            z = pos[0, 2, :, :].cpu().numpy()
+            points = np.column_stack((x.flatten(), y.flatten(), z.flatten()))
+            point_cloud = Points(points, r=5)  # 'r' sets the radius of each point
+            point_cloud.write(os.path.join(saveing_location,"point_cloud.vtk"))
+
+            x = points_before_offset[0, 0, :, :].cpu().numpy()  # Transfer to CPU and convert to NumPy
+            y = points_before_offset[0, 1, :, :].cpu().numpy()
+            z = points_before_offset[0, 2, :, :].cpu().numpy()
+            points = np.column_stack((x.flatten(), y.flatten(), z.flatten()))
+            point_cloud = Points(points, r=5)  # 'r' sets the radius of each point
+            point_cloud.write(os.path.join(saveing_location,"point_cloud_before_offset.vtk"))
+            
+            features_rest1 = features_rest[0].permute(1,2,0).cpu().numpy()
+            features_dc1 = features_dc[0].permute(1,2,0).cpu().numpy()
+            opacity1 = self.flatten_vector(self.opacity_activation(opacity))[0].cpu().numpy()
+            np.save(os.path.join(saveing_location,"Sigma.npy"),features_rest1)
+            np.save(os.path.join(saveing_location,"features_dc.npy"),features_dc1)
+            np.save(os.path.join(saveing_location,"opacity.npy"),opacity1)
+            
+        #########
 
         if self.cfg.model.isotropic:
             scaling_out = torch.cat([scaling[:, :1, ...], scaling[:, :1, ...], scaling[:, :1, ...]], dim=1)
@@ -761,7 +893,9 @@ class GaussianSplatPredictor(nn.Module):
         out_dict = {
             "xyz": pos, 
             "rotation": self.flatten_vector(self.rotation_activation(rotation)),
-            "features_dc": self.flatten_vector(features_dc).unsqueeze(2)
+            "features_dc": self.flatten_vector(features_dc).unsqueeze(2),
+            "features_dc_image": features_dc,
+            "offset": offset
                 }
 
         if activate_output:
@@ -792,5 +926,251 @@ class GaussianSplatPredictor(nn.Module):
 
         out_dict = self.multi_view_union(out_dict, B, N_views)
         out_dict = self.make_contiguous(out_dict)
+        out_dict["normalized_depth"] = self.flatten_vector(depth)
+        out_dict["depth_not_flat"] = depth
 
         return out_dict
+
+    def forward(self, x, 
+                source_cameras_view_to_world, 
+                source_cv2wT_quat=None,
+                focals_pixels=None,
+                activate_output=True,saveing_location = None):
+        dic = {}
+        calculate_output = self.calculate_network_output(x, 
+                source_cameras_view_to_world, 
+                source_cv2wT_quat=None,
+                focals_pixels=None,
+                activate_output=True)
+        if saveing_location is not None:
+            os.makedirs(os.path.join(saveing_location,"back"), exist_ok=True)
+            os.makedirs(os.path.join(saveing_location,"front"), exist_ok=True) 
+            dic["front"] = self.forward_callback(x, 
+                    source_cameras_view_to_world, 
+                    source_cv2wT_quat,
+                    focals_pixels,
+                    activate_output,
+                    os.path.join(saveing_location,"front"),index = 0,newtwork_output = calculate_output)
+            dic["back"] = self.forward_callback(x, 
+                    source_cameras_view_to_world, 
+                    source_cv2wT_quat,
+                    focals_pixels,
+                    activate_output,
+                    os.path.join(saveing_location,"back"),index = 1, newtwork_output = calculate_output)
+
+            saveing_location1 = saveing_location.replace("\\", "/")
+            script_content = f"""
+            import os
+            import numpy as np
+            import matplotlib.pyplot as plt
+            front_path = os.path.join("{saveing_location1}", 'front')
+            back_path = os.path.join("{saveing_location1}", 'back')
+            depth_data_front = np.load(os.path.join(front_path, 'depth_data.npz'))
+            depth1_front = depth_data_front['depth1'].squeeze()
+            norm_data_front = np.load(os.path.join(front_path, 'depth_norm_data.npz'))
+            depth_norm_front = norm_data_front['depth_norm'].squeeze()
+            depth_data_back = np.load(os.path.join(back_path, 'depth_data.npz'))
+            depth1_back = depth_data_back['depth1'].squeeze()
+            norm_data_back = np.load(os.path.join(back_path, 'depth_norm_data.npz'))
+            depth_norm_back = norm_data_back['depth_norm'].squeeze()
+            vmin_depth = min(depth1_front.min(), depth1_back.min())
+            vmax_depth = max(depth1_front.max(), depth1_back.max())
+            vmin_norm = min(depth_norm_front.min(), depth_norm_back.min())
+            vmax_norm = max(depth_norm_front.max(), depth_norm_back.max())
+            fig, axs = plt.subplots(2, 2, figsize=(12, 12))
+            im1 = axs[0, 0].imshow(depth1_front, cmap='hot', vmin=vmin_depth, vmax=vmax_depth, interpolation='nearest')
+            axs[0, 0].set_title('Front Depth Heatmap')
+            fig.colorbar(im1, ax=axs[0, 0])
+            im2 = axs[0, 1].imshow(depth_norm_front, cmap='hot', vmin=vmin_norm, vmax=vmax_norm, interpolation='nearest')
+            axs[0, 1].set_title('Front Normalized Depth Heatmap')
+            fig.colorbar(im2, ax=axs[0, 1])
+            im3 = axs[1, 0].imshow(depth1_back, cmap='hot', vmin=vmin_depth, vmax=vmax_depth, interpolation='nearest')
+            axs[1, 0].set_title('Back Depth Heatmap')
+            fig.colorbar(im3, ax=axs[1, 0])
+            im4 = axs[1, 1].imshow(depth_norm_back, cmap='hot', vmin=vmin_norm, vmax=vmax_norm, interpolation='nearest')
+            axs[1, 1].set_title('Back Normalized Depth Heatmap')
+            fig.colorbar(im4, ax=axs[1, 1])
+            plt.tight_layout()
+            plt.savefig(os.path.join("{saveing_location1}", 'combined_heatmaps.png'), dpi=300)
+            plt.show()
+            """.replace("    ", "")
+            with open(os.path.join(saveing_location,"plot_heatmaps.py"), "w") as file:
+                file.write(script_content)
+
+
+            ######################################################
+            saveing_location1 = saveing_location.replace("\\", "/")
+            script_content = f"""
+            import vedo
+            import numpy as np
+            import os
+            def load_points_with_colors(file_path):
+                point_cloud = vedo.load(file_path)
+                # Extract points and colors
+                points = point_cloud.vertices  # Get the vertices (points)
+                colors = point_cloud.pointcolors  # Get the point colors
+                if colors.shape[1] == 4:
+                    colors = colors[:, :3] / 255.0  # Normalize RGB colors if RGBA
+                else:
+                    colors = colors / 255.0  # Normalize RGB colors if only RGB
+                return points, colors
+
+            def visualize_loaded_points(points_list, colors_list, labels):
+                plotter = vedo.Plotter()
+                for points, colors, label in zip(points_list, colors_list, labels):
+                    point_cloud = vedo.Points(points, r=8)  # Set radius of points
+                    if colors.shape[1] == 3:
+                        colors_rgba = np.hstack((colors, np.ones((colors.shape[0], 1))))  # Add alpha channel
+                        colors_rgba = (colors_rgba * 255).astype(np.uint8)  # Convert to 0-255 range
+                    else:
+                        colors_rgba = colors
+                    point_cloud.pointcolors = colors_rgba  # Set the colors
+                    point_cloud.point_size(10)  # Set point size
+                    plotter += point_cloud
+                plotter.show(interactive=True, bg='white')
+
+            def validate_and_visualize(file_paths):
+                points_list = []
+                colors_list = []
+                labels = []
+                for file_path in file_paths:
+                    points, colors = load_points_with_colors(file_path)
+                    points_list.append(points)
+                    colors_list.append(colors)
+                    labels.append(os.path.basename(file_path))  # Use file name as label
+                visualize_loaded_points(points_list, colors_list, labels)
+
+            if __name__ == "__main__":
+                file_paths = [
+                    os.path.join("{saveing_location1}", 'front', 'point_cloud_with_colors.vtk'),
+                    os.path.join("{saveing_location1}", 'back', 'point_cloud_with_colors.vtk')
+                ]
+                validate_and_visualize(file_paths)
+            """
+
+            with open(os.path.join(saveing_location, "point_cloud_visualization_with_colors.py"), "w") as file:
+                file.write(script_content)
+
+
+            ####################
+            
+
+        
+            saveing_location1 = saveing_location.replace("\\","/")
+            function = """
+                def visualize_loaded_points(point_clouds, output_gif="point_visualization.gif", duration=5.0, fps=10):
+                    video = vedo.Video(output_gif, duration=duration, fps=fps)
+                    plotter = vedo.Plotter()
+                    n = 4
+                    for angle in range(0, 360, 2):
+                        for pc in point_clouds:
+                            pc.rotate(n, axis=(1, 0, 0))
+                        plotter.show(point_clouds, interactive=False, bg='white')
+                        video.add_frame()
+
+                    for angle in range(0, 360, 2):
+                        for pc in point_clouds:
+                            pc.rotate(n, axis=(0, 1, 0))
+                        plotter.show(point_clouds, interactive=False, bg='white')
+                        video.add_frame()
+
+                    for angle in range(0, 360, 2):
+                        for pc in point_clouds:
+                            pc.rotate(n, axis=(1, 1, 0))
+                        plotter.show(point_clouds, interactive=False, bg='white')
+                        video.add_frame()
+
+                    for angle in range(0, 360, 2):
+                        for pc in point_clouds:
+                            pc.rotate(n, axis=(1, 0, 1))
+                        plotter.show(point_clouds, interactive=False, bg='white')
+                        video.add_frame()
+
+                    plotter.close()
+                    video.close()
+                    print("GIF of point visualization saved successfully!")
+                """
+            function = function.replace("                ","")
+            script_content = f"""
+                                    import os
+                                    import vedo
+                                    import numpy as np
+                                    {
+                                        function
+                                    }
+                                    xyz_back = vedo.load(os.path.join("{saveing_location1}/back","point_cloud.vtk"))
+                                    xyz_front = vedo.load(os.path.join("{saveing_location1}/front","point_cloud.vtk"))
+                                    opacity_back = np.load(os.path.join("{saveing_location1}/back","opacity.npy"))
+                                    opacity_front = np.load(os.path.join("{saveing_location1}/front","opacity.npy"))
+                                    threshold = 0.1
+                                    opacity_back [opacity_back < threshold] = 0
+                                    opacity_front [opacity_front < threshold] = 0
+                                    opacity_front [opacity_front > threshold] = 1
+                                    opacity_back [opacity_back > threshold] = 1
+                                    xyz_back_color = np.array([[1,0,0] for _ in range(len(xyz_back.vertices))])
+                                    xyz_front_color = np.array([[0,0,1] for _ in range(len(xyz_back.vertices))])
+                                    xyz_back.point_size(5)
+                                    xyz_front.point_size(5)
+                                    colors_rgba = np.hstack((xyz_back_color,opacity_back) )
+                                    colors_rgba = colors_rgba * 255
+                                    xyz_back.pointcolors = colors_rgba
+                                    colors_rgba = np.hstack((xyz_front_color,opacity_front) )
+                                    colors_rgba = colors_rgba * 255
+                                    xyz_front.pointcolors = colors_rgba
+                                    #vedo.show([xyz_back,xyz_front], axes=1)
+                                    visualize_loaded_points([xyz_back, xyz_front], output_gif="{saveing_location1}/rotating_points_last_one.gif")
+            """.replace("                                    ","")
+            with open(os.path.join(saveing_location,"point_cloud.py"), "w") as file:
+                file.write(script_content)
+
+            saveing_location1 = saveing_location.replace("\\","/")
+            script_content = f"""
+                                import os
+                                import vedo
+                                import numpy as np
+                                {
+                                    function
+                                }
+                                xyz_back = vedo.load(os.path.join("{saveing_location1}/back","point_cloud_before_offset.vtk"))
+                                xyz_front = vedo.load(os.path.join("{saveing_location1}/front","point_cloud_before_offset.vtk"))
+                                opacity_back = np.load(os.path.join("{saveing_location1}/back","opacity.npy"))
+                                opacity_front = np.load(os.path.join("{saveing_location1}/front","opacity.npy"))
+                                threshold = 0.1
+                                opacity_back [opacity_back < threshold] = 0
+                                opacity_front [opacity_front < threshold] = 0
+                                opacity_front [opacity_front > threshold] = 1
+                                opacity_back [opacity_back > threshold] = 1
+                                xyz_back_color = np.array([[1,0,0] for _ in range(len(xyz_back.vertices))])
+                                xyz_front_color = np.array([[0,0,1] for _ in range(len(xyz_back.vertices))])
+                                xyz_back.point_size(5)
+                                xyz_front.point_size(5)
+                                colors_rgba = np.hstack((xyz_back_color,opacity_back) )
+                                colors_rgba = colors_rgba * 255
+                                xyz_back.pointcolors = colors_rgba
+                                colors_rgba = np.hstack((xyz_front_color,opacity_front) )
+                                colors_rgba = colors_rgba * 255
+                                xyz_front.pointcolors = colors_rgba
+                                #vedo.show([xyz_back,xyz_front], axes=1)
+                                visualize_loaded_points([xyz_back, xyz_front], output_gif="rotating_points_last_one.gif")
+            """.replace("                                ","")
+            with open(os.path.join(saveing_location,"point_cloud_before_offset.py"), "w") as file:
+                file.write(script_content)
+        else: 
+            dic["front"] = self.forward_callback(x, 
+                    source_cameras_view_to_world, 
+                    source_cv2wT_quat,
+                    focals_pixels,
+                    activate_output,
+                    saveing_location,index = 0,newtwork_output = calculate_output)
+            dic["back"] = self.forward_callback(x, 
+                    source_cameras_view_to_world, 
+                    source_cv2wT_quat,
+                    focals_pixels,
+                    activate_output,
+                    saveing_location,index = 1, newtwork_output = calculate_output)
+            normalized_depth_front = dic["front"]["normalized_depth"]
+            normalized_depth_back = dic["back"]["normalized_depth"]
+            dic["front"]["normalized_depth"], dic["back"]["normalized_depth"]= torch.split(torch.cat([normalized_depth_front,normalized_depth_back],dim = 1),[4096,4096],dim=1)
+
+            
+        return dic

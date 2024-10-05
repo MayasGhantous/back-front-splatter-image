@@ -20,21 +20,24 @@ from eval import evaluate_dataset
 from gaussian_renderer import render_predicted
 from scene.gaussian_predictor import GaussianSplatPredictor
 from datasets.dataset_factory import get_dataset
+from DepthLoss import DepthLossF
+import matplotlib.pyplot as plt
 
-
+os.environ['HYDRA_FULL_ERROR'] = '1'
 @hydra.main(version_base=None, config_path='configs', config_name="default_config")
 def main(cfg: DictConfig):
-
+    print(os.getcwd())
     torch.set_float32_matmul_precision('high')
     if cfg.general.mixed_precision:
         fabric = Fabric(accelerator="cuda", devices=cfg.general.num_devices, strategy="ddp",
                         precision="16-mixed")
     else:
-        fabric = Fabric(accelerator="cuda", devices=cfg.general.num_devices, strategy="ddp")
+        fabric = Fabric(accelerator="cuda", devices=cfg.general.num_devices)#, strategy="ddp")
     fabric.launch()
 
     if fabric.is_global_zero:
         vis_dir = os.getcwd()
+        print("Visualizing in directory: ", vis_dir)
 
         dict_cfg = OmegaConf.to_container(
             cfg, resolve=True, throw_on_missing=True
@@ -109,11 +112,16 @@ def main(cfg: DictConfig):
         loss_fn = l2_loss
     elif cfg.opt.loss == "l1":
         loss_fn = l1_loss
+    loss_depth = DepthLossF()  
 
     if cfg.opt.lambda_lpips != 0:
         lpips_fn = fabric.to_device(lpips_lib.LPIPS(net='vgg'))
     lambda_lpips = cfg.opt.lambda_lpips
-    lambda_l12 = 1.0 - lambda_lpips
+    lambda_depth = 0.2
+    if lambda_lpips + lambda_depth > 1.0:
+        lambda_lpips -= lambda_depth
+    
+    lambda_l12 = 1.0 - lambda_lpips - lambda_depth
 
     bg_color = [1, 1, 1] if cfg.data.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32)
@@ -128,7 +136,8 @@ def main(cfg: DictConfig):
 
     dataset = get_dataset(cfg, "train")
     dataloader = DataLoader(dataset, 
-                            batch_size=cfg.opt.batch_size,
+                            #batch_size=cfg.opt.batch_size,
+                            batch_size=4,
                             shuffle=True,
                             num_workers=num_workers,
                             persistent_workers=persistent_workers)
@@ -157,9 +166,12 @@ def main(cfg: DictConfig):
     print("Beginning training")
     first_iter += 1
     iteration = first_iter
-
+    print((cfg.opt.iterations + 1 - first_iter)// len(dataloader) + 1)
+    print(len(dataloader))
+    
     for num_epoch in range((cfg.opt.iterations + 1 - first_iter)// len(dataloader) + 1):
-        dataloader.sampler.set_epoch(num_epoch)        
+        #dataloader.sampler.set_epoch(num_epoch)        
+        print("starting epoch {} on process {}".format(num_epoch, fabric.global_rank))
 
         for data in dataloader:
             iteration += 1
@@ -177,14 +189,16 @@ def main(cfg: DictConfig):
             else:
                 focals_pixels_pred = None
                 input_images = data["gt_images"][:, :cfg.data.input_images, ...]
-
-            gaussian_splats = gaussian_predictor(input_images,
+            gaussian_splats_1 = gaussian_predictor(input_images,
                                                 data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
                                                 rot_transform_quats,
                                                 focals_pixels_pred)
+            gaussian_splats_back = gaussian_splats_1["back"]
+            gaussian_splats_front = gaussian_splats_1["front"]                                
 
 
             if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
+                gaussian_splats = None
                 # regularize very big gaussians
                 if len(torch.where(gaussian_splats["scaling"] > 20)[0]) > 0:
                     big_gaussian_reg_loss = torch.mean(
@@ -206,37 +220,63 @@ def main(cfg: DictConfig):
             lpips_loss_sum = 0.0
             rendered_images = []
             gt_images = []
+            front_depths = []
+            back_depths = []
+            offset_back = []
+            offset_front=[]
             for b_idx in range(data["gt_images"].shape[0]):
                 # image at index 0 is training, remaining images are targets
                 # Rendering is done sequentially because gaussian rasterization code
                 # does not support batching
-                gaussian_splat_batch = {k: v[b_idx].contiguous() for k, v in gaussian_splats.items()}
+                gaussian_splat_batch_back = {k: v[b_idx].contiguous() for k, v in gaussian_splats_back.items()}
+                gaussian_splat_batch_front = {k: v[b_idx].contiguous() for k, v in gaussian_splats_front.items()}
+                #front_depths.append(gaussian_splat_batch_front["normalized_depth"])
+                #back_depths.append(gaussian_splat_batch_back["normalized_depth"])
+
+                gaussian_splat_batch= {k: torch.cat([v,gaussian_splat_batch_front[k]],dim = 0) for k, v in gaussian_splat_batch_back.items()}
                 for r_idx in range(cfg.data.input_images, data["gt_images"].shape[1]):
                     if "focals_pixels" in data.keys():
                         focals_pixels_render = data["focals_pixels"][b_idx, r_idx].cpu()
                     else:
                         focals_pixels_render = None
-                    image = render_predicted(gaussian_splat_batch, 
+                    image_back = render_predicted(gaussian_splat_batch, 
                                         data["world_view_transforms"][b_idx, r_idx],
                                         data["full_proj_transforms"][b_idx, r_idx],
                                         data["camera_centers"][b_idx, r_idx],
                                         background,
                                         cfg,
                                         focals_pixels=focals_pixels_render)["render"]
+                    image = image_back
+                    '''image_front = render_predicted(gaussian_splat_batch_front, 
+                                        data["world_view_transforms"][b_idx, r_idx],
+                                        data["full_proj_transforms"][b_idx, r_idx],
+                                        data["camera_centers"][b_idx, r_idx],
+                                        background,
+                                        cfg,
+                                        focals_pixels=focals_pixels_render)["render"]'''
                     # Put in a list for a later loss computation
-                    rendered_images.append(image)
+                    front_depths.append(gaussian_splat_batch_front["normalized_depth"])
+                    back_depths.append(gaussian_splat_batch_back["normalized_depth"])
+                    offset_back.append(gaussian_splat_batch_back["offset"])
+                    offset_front.append(gaussian_splat_batch_front["offset"])
+                    rendered_images.append(image_back)
                     gt_image = data["gt_images"][b_idx, r_idx]
                     gt_images.append(gt_image)
+            offset_front = torch.stack(offset_front, dim=0)
+            offset_back = torch.stack(offset_back, dim=0)
+            back_depths = torch.stack(back_depths, dim=0)
+            front_depths = torch.stack(front_depths, dim=0)
             rendered_images = torch.stack(rendered_images, dim=0)
             gt_images = torch.stack(gt_images, dim=0)
             # Loss computation
+            depth_loss = loss_depth(back_depths, front_depths,offset_back,offset_front)
             l12_loss_sum = loss_fn(rendered_images, gt_images) 
             if cfg.opt.lambda_lpips != 0:
                 lpips_loss_sum = torch.mean(
                     lpips_fn(rendered_images * 2 - 1, gt_images * 2 - 1),
                     )
 
-            total_loss = l12_loss_sum * lambda_l12 + lpips_loss_sum * lambda_lpips
+            total_loss = l12_loss_sum * lambda_l12 + lpips_loss_sum * lambda_lpips + depth_loss * lambda_depth
             if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
                 total_loss = total_loss + big_gaussian_reg_loss + small_gaussian_reg_loss
 
@@ -259,10 +299,13 @@ def main(cfg: DictConfig):
             # ========= Logging =============
             with torch.no_grad():
                 if iteration % cfg.logging.loss_log == 0 and fabric.is_global_zero:
-                    wandb.log({"training_loss": np.log10(total_loss.item() + 1e-8)}, step=iteration)
+                    wandb.log({"training_loss": total_loss.item()}, step=iteration)
+                    wandb.log({"training_depth_loss": lambda_depth * depth_loss.item() }, step=iteration)
+                    wandb.log({"training_l12_loss": lambda_l12*l12_loss_sum.item()}, step=iteration)
                     if cfg.opt.lambda_lpips != 0:
-                        wandb.log({"training_l12_loss": np.log10(l12_loss_sum.item() + 1e-8)}, step=iteration)
-                        wandb.log({"training_lpips_loss": np.log10(lpips_loss_sum.item() + 1e-8)}, step=iteration)
+                        
+                        wandb.log({"training_lpips_loss": lambda_lpips*lpips_loss_sum.item()}, step=iteration)
+                        
                     if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
                         if type(big_gaussian_reg_loss) == float:
                             brl_for_log = big_gaussian_reg_loss
@@ -278,6 +321,7 @@ def main(cfg: DictConfig):
                 if (iteration % cfg.logging.render_log == 0 or iteration == 1) and fabric.is_global_zero:
                     wandb.log({"render": wandb.Image(image.clamp(0.0, 1.0).permute(1, 2, 0).detach().cpu().numpy())}, step=iteration)
                     wandb.log({"gt": wandb.Image(gt_image.permute(1, 2, 0).detach().cpu().numpy())}, step=iteration)
+            
                 if (iteration % cfg.logging.loop_log == 0 or iteration == 1) and fabric.is_global_zero:
                     # torch.cuda.empty_cache()
                     try:
@@ -306,7 +350,28 @@ def main(cfg: DictConfig):
                                                         vis_data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
                                                         rot_transform_quats,
                                                         focals_pixels_pred)
-
+                    gaussian_splats_vis_back = gaussian_splats_vis["back"]
+                    gaussian_splats_vis_front = gaussian_splats_vis["front"]
+                    #gaussian_splats_vis = gaussian_splats_vis_back
+                    gaussian_splats_vis = {k: torch.cat([v,gaussian_splats_vis_front[k]],dim = 1) for k, v in gaussian_splats_vis_back.items()}
+                    wandb.log({"feature_dc_back":wandb.Image(gaussian_splats_vis_back["features_dc_image"].squeeze(0).clamp(0.0, 1.0).permute(1, 2, 0).detach().cpu().numpy())}, step=iteration)
+                    wandb.log({"feature_dc_front":wandb.Image(gaussian_splats_vis_front["features_dc_image"].squeeze(0).clamp(0.0,1.0).permute(1, 2, 0).detach().cpu().numpy())}, step=iteration)
+                    depth1_front = gaussian_splats_vis_front["depth_not_flat"][0,0,:,:].detach().cpu().numpy()
+                    depth1_back = gaussian_splats_vis_back["depth_not_flat"][0,0,:,:].detach().cpu().numpy()
+                    vmin_depth = min(depth1_front.min(), depth1_back.min())
+                    vmax_depth = max(depth1_front.max(), depth1_back.max())
+                    plt.imshow(depth1_front, cmap='hot', vmin=vmin_depth, vmax=vmax_depth, interpolation='nearest')
+                    plt.title('Front Depth Heatmap')
+                    plt.colorbar()
+                    plt.savefig('front_depth_heatmap.png', dpi=300)
+                    plt.clf()
+                    wandb.log({"front_depth_heatmap":wandb.Image('front_depth_heatmap.png')}, step=iteration)
+                    plt.imshow(depth1_back, cmap='hot', vmin=vmin_depth, vmax=vmax_depth, interpolation='nearest')
+                    plt.title('Back Depth Heatmap')
+                    plt.colorbar() 
+                    plt.savefig('back_depth_heatmap.png', dpi=300)
+                    plt.clf()
+                    wandb.log({"back_depth_heatmap":wandb.Image('back_depth_heatmap.png')}, step=iteration)
                     test_loop = []
                     test_loop_gt = []
                     for r_idx in range(vis_data["gt_images"].shape[1]):
@@ -378,4 +443,5 @@ def main(cfg: DictConfig):
     wandb_run.finish()
 
 if __name__ == "__main__":
+    print(os.getcwd())
     main()

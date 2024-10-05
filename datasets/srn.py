@@ -11,7 +11,13 @@ from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getView2Wo
 
 from .shared_dataset import SharedDataset
 
-SHAPENET_DATASET_ROOT = None # Change this to your data directory
+####
+#new code
+import random
+from torchvision import transforms
+####
+
+SHAPENET_DATASET_ROOT = "C:/Users/update/Documents/GitHub/splatter-image/SNR" # Change this to your data directory
 assert SHAPENET_DATASET_ROOT is not None, "Update the location of the SRN Shapenet Dataset"
 
 class SRNDataset(SharedDataset):
@@ -38,7 +44,11 @@ class SRNDataset(SharedDataset):
         self.intrins = sorted(
             glob.glob(os.path.join(self.base_path, "*", "intrinsics.txt"))
         )
-
+        ####
+        #new code
+        #random.seed(42)
+        #self.intrins =  sorted(random.sample(self.intrins, 300))
+        ####
         print(len(self.intrins))
         if cfg.data.subset != -1:
             self.intrins = self.intrins[:cfg.data.subset]
@@ -88,9 +98,20 @@ class SRNDataset(SharedDataset):
             for cam_info in cam_infos:
                 R = cam_info.R
                 T = cam_info.T
+                #####
+                #new code
+                # Define the resize transformation
+                resize_transform = transforms.Resize((64, 64))  # Resize to 128x128
 
+                # Apply the transformation (if the image is a batch of images, use .unsqueeze(0) and .squeeze(0))
+                resized_image_tensor = resize_transform(PILtoTorch(cam_info.image, 
+                                                            (self.cfg.data.training_resolution, self.cfg.data.training_resolution)).clamp(0.0, 1.0)[:3, :, :])
+                self.all_rgbs[example_id].append(resized_image_tensor)
+                #####
+                '''
                 self.all_rgbs[example_id].append(PILtoTorch(cam_info.image, 
                                                             (self.cfg.data.training_resolution, self.cfg.data.training_resolution)).clamp(0.0, 1.0)[:3, :, :])
+                '''
 
                 world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1)
                 view_world_transform = torch.tensor(getView2World(R, T, trans, scale)).transpose(0, 1)
