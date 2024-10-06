@@ -175,7 +175,33 @@ A. Vedaldi is supported by ERC-CoG UNION 101001212.
 We thank Eldar Insafutdinov for his help with installation requirements.
 
 
-
-
 ## Results
+
+Losses before finetuning
+
+<p float="left">
+  <img src="https://github.com/user-attachments/assets/66118e83-78bd-4d64-abe9-7e8f8a3c4d65" width="300" />
+  <img src="https://github.com/user-attachments/assets/9d32dd74-3240-48d5-baa5-20b3f1f4a9da" width="300" />
+  <img src="https://github.com/user-attachments/assets/8ee36365-b5ca-4811-bbb5-6b2bc5304830" width="300" />
+</p>
+
+
+## Losses after finetuning
+
+<p float="left">
+  <img src="https://github.com/user-attachments/assets/02cd553e-36ab-4db6-aa84-65f9648bc78e" width="300" />
+  <img src="https://github.com/user-attachments/assets/f0ce91c9-2fb2-4aa3-a995-f47255a9c46d" width="300" />
+  <img src="https://github.com/user-attachments/assets/0c0192de-c1fe-4bca-9c51-4f03901596cd" width="300" />
+  <img src="YOUR_IMAGE_LINK_HERE" width="300" />
+</p>
+
+
+
+
+
+
+
+
+
+
 
