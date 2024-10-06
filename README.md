@@ -174,6 +174,9 @@ S. Szymanowicz is supported by an EPSRC Doctoral Training Partnerships Scholarsh
 A. Vedaldi is supported by ERC-CoG UNION 101001212.
 We thank Eldar Insafutdinov for his help with installation requirements.
 
+## Our Approach
+
+We aimed to innovate by splitting the Gaussians into front and back layers, and here are the results we obtained.
 
 ## Results
 
