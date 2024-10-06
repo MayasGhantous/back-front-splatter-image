@@ -196,17 +196,13 @@ We thank Eldar Insafutdinov for his help with installation requirements.
 </p>
 
 
-## Orginal results at 40k iterations 30k finetuning:
+## Comparison of Results at 40k Iterations and 30k Finetuning
 
-PSNR value - 22.1883
-LPIPS value - 0.15895
-SSIM value - 0.88761
-
-## Our results at 40k iterations 30k finetuning:
-PSNR value - 22.41871
-LPIPS value - 0.15271
-SSIM value - 0.89254
-
+| Metric          | Original Results | Our Results   |
+|-----------------|------------------|---------------|
+| **PSNR value**   | 22.1883          | 22.41871      |
+| **LPIPS value**  | 0.15895          | 0.15271       |
+| **SSIM value**   | 0.88761          | 0.89254       |
 
 
 
