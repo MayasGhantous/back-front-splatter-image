@@ -173,3 +173,9 @@ Gaussian rasterizer assumes row-major order of rigid body transform matrices, i.
 S. Szymanowicz is supported by an EPSRC Doctoral Training Partnerships Scholarship (DTP) EP/R513295/1 and the Oxford-Ashton Scholarship.
 A. Vedaldi is supported by ERC-CoG UNION 101001212.
 We thank Eldar Insafutdinov for his help with installation requirements.
+
+
+
+
+## Results
+
