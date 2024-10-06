@@ -220,8 +220,9 @@ We thank Eldar Insafutdinov for his help with installation requirements.
 
 
 
-### For more detalis read this presnation:
+### For more details, read this presentation:
 
+[View Presentation](https://docs.google.com/presentation/d/1mZXtxM5c9xqWiSFH3ywNiHFbnS5wdT0d/edit?usp=sharing&ouid=104114095327066430401&rtpof=true&sd=true)
 
 
 
