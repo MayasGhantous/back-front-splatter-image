@@ -206,17 +206,21 @@ We thank Eldar Insafutdinov for his help with installation requirements.
 
 
 
-
 # Validation Test Results
 
-| **Org Model** | **Ground Truth** | **Our Model** |
-|:-------------:|:----------------:|:-------------:|
-| ![Org Model](https://github.com/user-attachments/assets/6b642e64-0059-4369-8009-bd3d3b2162ee.gif) | ![Ground Truth](https://github.com/user-attachments/assets/6a2c7ef8-afa8-444d-ac43-059364094b13.gif) | ![Our Model](https://github.com/user-attachments/assets/10f8cb76-1704-47e2-ac72-ccfbcb2c3659.gif) |
+### Our Result:
+![Our Result](https://github.com/user-attachments/assets/7e978f18-60de-4088-a306-90e89a91e5da)
+
+### Original Result:
+![Original Result](https://github.com/user-attachments/assets/b022e40b-a038-4d15-85b7-02e0a918b2a6)
+
+### Ground Truth:
+![Ground Truth](https://github.com/user-attachments/assets/ce935deb-7552-4a66-8d3e-828ff27a50f6)
 
 
 
 
-
+### For more detalis read this presnation:
 
 
 
