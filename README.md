@@ -1,4 +1,4 @@
-# splatter-image
+![image](https://github.com/user-attachments/assets/8f5ca091-3eff-4af1-9e01-bf65801a3769)# splatter-image
 Official implementation of **"Splatter Image: Ultra-Fast Single-View 3D Reconstruction" (CVPR 2024)**
 
 [16 Apr 2024] Several big updates to the project since the first release:
@@ -177,7 +177,7 @@ We thank Eldar Insafutdinov for his help with installation requirements.
 
 ## Results
 
-Losses before finetuning
+## Losses before finetuning
 
 <p float="left">
   <img src="https://github.com/user-attachments/assets/66118e83-78bd-4d64-abe9-7e8f8a3c4d65" width="300" />
@@ -191,9 +191,22 @@ Losses before finetuning
 <p float="left">
   <img src="https://github.com/user-attachments/assets/02cd553e-36ab-4db6-aa84-65f9648bc78e" width="300" />
   <img src="https://github.com/user-attachments/assets/f0ce91c9-2fb2-4aa3-a995-f47255a9c46d" width="300" />
-  <img src="https://github.com/user-attachments/assets/0c0192de-c1fe-4bca-9c51-4f03901596cd" width="300" />
-  <img src="YOUR_IMAGE_LINK_HERE" width="300" />
+  <img src="https://github.com/user-attachments/assets/96b740a2-9726-43e8-a135-0098b2dea650" width="300" />
+  <img src="https://github.com/user-attachments/assets/e3efffc3-71ec-4b64-8284-6791b8dc364a" width="300" />
 </p>
+
+
+## Orginal results at 40k iterations 30k finetuning:
+
+PSNR value - 22.1883
+LPIPS value - 0.15895
+SSIM value - 0.88761
+
+## Our results at 40k iterations 30k finetuning:
+PSNR value - 22.41871
+LPIPS value - 0.15271
+SSIM value - 0.89254
+
 
 
 
