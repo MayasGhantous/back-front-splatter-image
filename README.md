@@ -59,8 +59,7 @@ and the second step fine-tunning which also has lpips-loss
 [View Presentation](https://docs.google.com/presentation/d/1w29UsamSIe1vavGOS0ox0E60W_vwTnMA/edit?usp=sharing&ouid=104114095327066430401&rtpof=true&sd=true)
 
 # Acknowledgements
-
-
+We want to thank Simon Korman a lecturer at the university of haifa for directing us.
 
 
 
